@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     relay_public_scheme: str = "https"
     relay_public_host: str = "relay.example.com"
     relay_rtmp_port: int = 1935
+    relay_rtc_port: int = 8000
+    relay_rtc_candidate: str = ""
     relay_default_app: str = "live"
     relay_default_stream: str = "rods"
 
@@ -23,4 +25,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

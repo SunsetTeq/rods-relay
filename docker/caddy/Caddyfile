@@ -4,6 +4,17 @@
     reverse_proxy api:8000
   }
 
+  @rtc path /rtc/*
+  handle @rtc {
+    header {
+      Access-Control-Allow-Origin "*"
+      Access-Control-Allow-Methods "GET, HEAD, POST, OPTIONS"
+      Access-Control-Allow-Headers "*"
+    }
+
+    reverse_proxy srs:1985
+  }
+
   @hls path /live/*
   handle @hls {
     header {

@@ -27,6 +27,8 @@ async def get_relay_status() -> RelayStatusResponse:
         relay_public_scheme=settings.relay_public_scheme,
         relay_public_host=settings.relay_public_host,
         relay_rtmp_port=settings.relay_rtmp_port,
+        relay_rtc_port=settings.relay_rtc_port,
+        relay_rtc_candidate=settings.relay_rtc_candidate,
         relay_default_app=settings.relay_default_app,
         relay_default_stream=settings.relay_default_stream,
         publish_url=_build_publish_url(
@@ -34,6 +36,14 @@ async def get_relay_status() -> RelayStatusResponse:
             stream_name=settings.relay_default_stream,
         ),
         hls_url=_build_hls_url(
+            app_name=settings.relay_default_app,
+            stream_name=settings.relay_default_stream,
+        ),
+        whep_url=_build_whep_url(
+            app_name=settings.relay_default_app,
+            stream_name=settings.relay_default_stream,
+        ),
+        whip_url=_build_whip_url(
             app_name=settings.relay_default_app,
             stream_name=settings.relay_default_stream,
         ),
@@ -57,6 +67,8 @@ def get_stream_plan(stream_name: str, app_name: str | None = None) -> StreamPlan
         stream_name=normalized_stream,
         publish_url=_build_publish_url(app_name=relay_app, stream_name=normalized_stream),
         hls_url=_build_hls_url(app_name=relay_app, stream_name=normalized_stream),
+        whep_url=_build_whep_url(app_name=relay_app, stream_name=normalized_stream),
+        whip_url=_build_whip_url(app_name=relay_app, stream_name=normalized_stream),
     )
 
 
@@ -71,4 +83,18 @@ def _build_hls_url(app_name: str, stream_name: str) -> str:
     return (
         f"{settings.relay_public_scheme}://{settings.relay_public_host}/"
         f"{quote(app_name)}/{quote(stream_name)}.m3u8"
+    )
+
+
+def _build_whep_url(app_name: str, stream_name: str) -> str:
+    return (
+        f"{settings.relay_public_scheme}://{settings.relay_public_host}/rtc/v1/whep/"
+        f"?app={quote(app_name)}&stream={quote(stream_name)}"
+    )
+
+
+def _build_whip_url(app_name: str, stream_name: str) -> str:
+    return (
+        f"{settings.relay_public_scheme}://{settings.relay_public_host}/rtc/v1/whip/"
+        f"?app={quote(app_name)}&stream={quote(stream_name)}"
     )
