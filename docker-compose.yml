@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  srs:
+    image: ossrs/srs:5
+    command: ["./objs/srs", "-c", "conf/srs.conf"]
+    env_file:
+      - .env
+    volumes:
+      - ./docker/srs/srs.conf:/usr/local/srs/conf/srs.conf:ro
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "${RELAY_RTMP_PORT:-1935}:1935"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - srs
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+
