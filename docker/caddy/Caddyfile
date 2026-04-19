@@ -1,6 +1,4 @@
 {$RELAY_PUBLIC_HOST} {
-  encode gzip zstd
-
   @api path /health /api/*
   handle @api {
     reverse_proxy api:8000
@@ -8,11 +6,22 @@
 
   @hls path /live/*
   handle @hls {
-    reverse_proxy srs:8080
+    header {
+      Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+      Pragma "no-cache"
+      Expires "0"
+      Access-Control-Allow-Origin "*"
+      Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+      Access-Control-Allow-Headers "*"
+    }
+
+    reverse_proxy srs:8080 {
+      flush_interval -1
+    }
   }
 
   handle {
+    encode gzip zstd
     reverse_proxy api:8000
   }
 }
-
