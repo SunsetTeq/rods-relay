@@ -12,6 +12,9 @@ services:
     command: ["./objs/srs", "-c", "conf/srs.conf"]
     env_file:
       - .env
+    ports:
+      # RTMP ingest from rods-backend must terminate on SRS directly.
+      - "${RELAY_RTMP_PORT:-1935}:1935"
     volumes:
       - ./docker/srs/srs.conf:/usr/local/srs/conf/srs.conf:ro
     restart: unless-stopped
@@ -23,7 +26,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "${RELAY_RTMP_PORT:-1935}:1935"
     volumes:
       - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -36,4 +38,3 @@ services:
 volumes:
   caddy_data:
   caddy_config:
-
