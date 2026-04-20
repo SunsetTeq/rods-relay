@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     relay_rtc_candidate: str = ""
     relay_default_app: str = "live"
     relay_default_stream: str = "rods"
+    relay_default_source_id: str = "rods-backend"
 
     srs_http_api_url: str = "http://srs:1985"
     srs_http_server_url: str = "http://srs:8080"
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     events_storage_dir: str = "data/event-screenshots"
     relay_ingest_token: str = ""
     live_ping_interval_seconds: int = 15
+    camera_command_retry_after_seconds: int = 15
 
     model_config = SettingsConfigDict(
         env_file=".env",

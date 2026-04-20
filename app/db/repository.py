@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,34 @@ class RelayEventRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_camera_states (
+                    source_id TEXT PRIMARY KEY,
+                    active_camera_id TEXT,
+                    state_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_camera_commands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL,
+                    command_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    error_text TEXT,
+                    result_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_delivered_at TEXT,
+                    completed_at TEXT
+                )
+                """
+            )
             self._ensure_column(connection, "relay_events", "track_id", "INTEGER")
             self._ensure_column(connection, "relay_events", "updated_at", "TEXT")
             self._ensure_column(
@@ -76,6 +105,14 @@ class RelayEventRepository:
                 "screenshot_annotated_path",
                 "TEXT",
             )
+            self._ensure_column(connection, "relay_camera_states", "active_camera_id", "TEXT")
+            self._ensure_column(connection, "relay_camera_states", "state_json", "TEXT")
+            self._ensure_column(connection, "relay_camera_states", "updated_at", "TEXT")
+            self._ensure_column(connection, "relay_camera_commands", "attempts", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "relay_camera_commands", "error_text", "TEXT")
+            self._ensure_column(connection, "relay_camera_commands", "result_json", "TEXT")
+            self._ensure_column(connection, "relay_camera_commands", "last_delivered_at", "TEXT")
+            self._ensure_column(connection, "relay_camera_commands", "completed_at", "TEXT")
             connection.commit()
 
     def _ensure_column(
@@ -276,6 +313,243 @@ class RelayEventRepository:
                 "SELECT COUNT(*) AS total FROM relay_events"
             ).fetchone()
         return int(row["total"]) if row is not None else 0
+
+    def upsert_camera_state(
+        self,
+        source_id: str,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        serialized_state = json.dumps(state)
+        active_camera_id = state.get("active_camera_id")
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO relay_camera_states (
+                    source_id,
+                    active_camera_id,
+                    state_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    active_camera_id = excluded.active_camera_id,
+                    state_json = excluded.state_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    source_id,
+                    active_camera_id,
+                    serialized_state,
+                    updated_at,
+                ),
+            )
+            connection.commit()
+
+        return self.get_camera_state(source_id) or {
+            **state,
+            "source_id": source_id,
+            "updated_at": updated_at,
+        }
+
+    def get_camera_state(self, source_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT source_id, active_camera_id, state_json, updated_at
+                FROM relay_camera_states
+                WHERE source_id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        payload = json.loads(row["state_json"])
+        return {
+            **payload,
+            "source_id": row["source_id"],
+            "active_camera_id": row["active_camera_id"],
+            "updated_at": row["updated_at"],
+        }
+
+    def create_camera_command(
+        self,
+        source_id: str,
+        command_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        payload_json = json.dumps(payload)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO relay_camera_commands (
+                    source_id,
+                    command_type,
+                    payload_json,
+                    status,
+                    attempts,
+                    error_text,
+                    result_json,
+                    created_at,
+                    updated_at,
+                    last_delivered_at,
+                    completed_at
+                ) VALUES (?, ?, ?, 'pending', 0, NULL, NULL, ?, ?, NULL, NULL)
+                """,
+                (
+                    source_id,
+                    command_type,
+                    payload_json,
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+            command_id = int(cursor.lastrowid)
+
+        return self.get_camera_command(command_id) or {
+            "id": command_id,
+            "source_id": source_id,
+            "command_type": command_type,
+            "payload": payload,
+            "status": "pending",
+            "attempts": 0,
+            "created_at": now,
+            "updated_at": now,
+            "completed_at": None,
+            "error": None,
+            "result": None,
+        }
+
+    def claim_next_camera_command(
+        self,
+        source_id: str,
+        retry_after_seconds: int,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        retry_before = datetime.fromtimestamp(
+            now.timestamp() - retry_after_seconds,
+            tz=timezone.utc,
+        ).isoformat()
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM relay_camera_commands
+                WHERE source_id = ?
+                  AND (
+                    status = 'pending'
+                    OR (
+                        status = 'sent'
+                        AND (
+                            last_delivered_at IS NULL
+                            OR last_delivered_at <= ?
+                        )
+                    )
+                  )
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (
+                    source_id,
+                    retry_before,
+                ),
+            ).fetchall()
+            row = rows[0] if rows else None
+            if row is None:
+                return None
+
+            updated_at = now.isoformat()
+            connection.execute(
+                """
+                UPDATE relay_camera_commands
+                SET
+                    status = 'sent',
+                    attempts = attempts + 1,
+                    updated_at = ?,
+                    last_delivered_at = ?
+                WHERE id = ?
+                """,
+                (
+                    updated_at,
+                    updated_at,
+                    int(row["id"]),
+                ),
+            )
+            connection.commit()
+
+        return self.get_camera_command(int(row["id"]))
+
+    def complete_camera_command(
+        self,
+        command_id: int,
+        ok: bool,
+        error: str | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        status = "completed" if ok else "failed"
+        result_json = json.dumps(result) if result is not None else None
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE relay_camera_commands
+                SET
+                    status = ?,
+                    error_text = ?,
+                    result_json = ?,
+                    updated_at = ?,
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    error,
+                    result_json,
+                    updated_at,
+                    updated_at,
+                    command_id,
+                ),
+            )
+            connection.commit()
+
+        return self.get_camera_command(command_id)
+
+    def get_camera_command(self, command_id: int) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM relay_camera_commands
+                WHERE id = ?
+                """,
+                (command_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        payload = json.loads(row["payload_json"])
+        result = json.loads(row["result_json"]) if row["result_json"] else None
+        return {
+            "id": int(row["id"]),
+            "source_id": row["source_id"],
+            "command_type": row["command_type"],
+            "payload": payload,
+            "status": row["status"],
+            "attempts": int(row["attempts"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "completed_at": row["completed_at"],
+            "error": row["error_text"],
+            "result": result,
+        }
 
     def get_event_by_id(self, event_id: int) -> dict[str, Any] | None:
         with self._connect() as connection:
