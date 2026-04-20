@@ -85,6 +85,18 @@ class RelayEventRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_vision_states (
+                    source_id TEXT PRIMARY KEY,
+                    frame_id INTEGER NOT NULL,
+                    frame_timestamp TEXT,
+                    detections_count INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             self._ensure_column(connection, "relay_events", "track_id", "INTEGER")
             self._ensure_column(connection, "relay_events", "updated_at", "TEXT")
             self._ensure_column(
@@ -113,6 +125,16 @@ class RelayEventRepository:
             self._ensure_column(connection, "relay_camera_commands", "result_json", "TEXT")
             self._ensure_column(connection, "relay_camera_commands", "last_delivered_at", "TEXT")
             self._ensure_column(connection, "relay_camera_commands", "completed_at", "TEXT")
+            self._ensure_column(connection, "relay_vision_states", "frame_id", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "relay_vision_states", "frame_timestamp", "TEXT")
+            self._ensure_column(
+                connection,
+                "relay_vision_states",
+                "detections_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(connection, "relay_vision_states", "payload_json", "TEXT")
+            self._ensure_column(connection, "relay_vision_states", "updated_at", "TEXT")
             connection.commit()
 
     def _ensure_column(
@@ -372,6 +394,114 @@ class RelayEventRepository:
             "source_id": row["source_id"],
             "active_camera_id": row["active_camera_id"],
             "updated_at": row["updated_at"],
+        }
+
+    def upsert_detection_frame(
+        self,
+        source_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        serialized_payload = json.dumps(payload)
+        frame_id = int(payload["frame_id"])
+        frame_timestamp = payload.get("frame_timestamp")
+        detections_count = int(payload["detections_count"])
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO relay_vision_states (
+                    source_id,
+                    frame_id,
+                    frame_timestamp,
+                    detections_count,
+                    payload_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    frame_id = excluded.frame_id,
+                    frame_timestamp = excluded.frame_timestamp,
+                    detections_count = excluded.detections_count,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    source_id,
+                    frame_id,
+                    frame_timestamp,
+                    detections_count,
+                    serialized_payload,
+                    updated_at,
+                ),
+            )
+            connection.commit()
+
+        stored_payload = self.get_detection_frame(source_id)
+        if stored_payload is not None:
+            return stored_payload
+
+        return {
+            **payload,
+            "source_id": source_id,
+            "updated_at": updated_at,
+        }
+
+    def get_detection_frame(self, source_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    source_id,
+                    frame_id,
+                    frame_timestamp,
+                    detections_count,
+                    payload_json,
+                    updated_at
+                FROM relay_vision_states
+                WHERE source_id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        payload = json.loads(row["payload_json"])
+        return {
+            **payload,
+            "source_id": row["source_id"],
+            "frame_id": int(row["frame_id"]),
+            "frame_timestamp": row["frame_timestamp"],
+            "detections_count": int(row["detections_count"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def get_current_objects(self, source_id: str) -> dict[str, Any] | None:
+        payload = self.get_detection_frame(source_id)
+        if payload is None:
+            return None
+
+        detections = payload.get("detections", [])
+        objects: list[dict[str, Any]] = []
+        for index, item in enumerate(detections):
+            track_id = item.get("track_id")
+            objects.append(
+                {
+                    "id": str(track_id) if track_id is not None else f"det-{index + 1}",
+                    "track_id": track_id,
+                    "class_id": int(item["class_id"]),
+                    "class_name": str(item["class_name"]),
+                    "confidence": float(item["confidence"]),
+                }
+            )
+
+        return {
+            "source_id": source_id,
+            "frame_id": int(payload["frame_id"]),
+            "frame_timestamp": payload.get("frame_timestamp"),
+            "objects_count": len(objects),
+            "objects": objects,
+            "updated_at": payload.get("updated_at"),
         }
 
     def create_camera_command(
