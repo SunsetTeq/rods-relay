@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     srs_http_api_url: str = "http://srs:1985"
     srs_http_server_url: str = "http://srs:8080"
+    backend_api_base_url: str = ""
+    backend_request_timeout_seconds: float = 5.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
