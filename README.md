@@ -6,14 +6,14 @@ This repository hosts:
 
 - `SRS` as the media relay server
 - `Caddy` for HTTPS termination and routing
-- a `FastAPI` control API for health checks, stream URL planning, and backend API/media/websocket proxying
+- a `FastAPI` control API for health checks, stream URL planning, and event ingestion/distribution
 
 ## Architecture
 
 ```text
 rods-backend (home PC with camera)
   -> RTMP publish -> rods-relay (SRS)
-  -> API/media/live relay -> rods-relay proxy endpoints
+  -> event + screenshot push -> rods-relay API
 
 rods-mobile (Expo Go)
   -> HTTPS HLS playback from rods-relay
@@ -47,15 +47,8 @@ docker compose up --build -d
 ```bash
 curl https://<your-host>/health
 curl https://<your-host>/api/v1/relay/status
-curl https://<your-host>/api/v1/relay/backend/video-status
 curl https://<your-host>/api/v1/relay/streams/rods
-```
-
-If you also want the relay to proxy backend control/data endpoints, screenshots,
-and live event websocket, set:
-
-```env
-BACKEND_API_BASE_URL=https://<your-backend-host>
+curl https://<your-host>/api/v1/events?limit=10
 ```
 
 ## Today’s Test Flow
@@ -120,34 +113,26 @@ Common checks:
 
 - `https://<your-host>/health` should return `200`.
 - `https://<your-host>/api/v1/relay/status` should report `srs_api_ok=true`.
-- `https://<your-host>/api/v1/relay/backend/video-status` should report whether backend API is reachable and whether frames are fresh.
+- `https://<your-host>/api/v1/events` should return the locally stored event feed on relay.
 - `rtmp://<your-host>:1935/live/rods` must terminate on `SRS`, otherwise `ffmpeg`
   on `rods-backend` will fail with `Cannot read RTMP handshake response`.
 - `https://<your-host>/live/rods.m3u8` will return `404 Not Found` until the first
   successful RTMP publish reaches `SRS`.
 
-## Backend Proxy Endpoints
+## Event Endpoints
 
-When `BACKEND_API_BASE_URL` is configured, relay also exposes proxy routes:
+Relay stores events pushed by backend and exposes them to mobile clients:
 
-- `GET /api/v1/cameras`
-- `GET /api/v1/cameras/available`
-- `POST /api/v1/cameras/select`
-- `POST /api/v1/cameras/activate`
-- `GET /api/v1/stream/status`
-- `GET /api/v1/stream/sources/usb`
-- `GET /api/v1/stream/availability`
-- `POST /api/v1/stream/select`
 - `GET /api/v1/events`
 - `GET /api/v1/events/recent`
 - `GET /api/v1/events/status`
 - `GET /api/v1/events/{id}`
-- `GET /api/v1/events/{id}/screenshots/original`
 - `GET /api/v1/events/{id}/screenshots/annotated`
 - `GET /api/v1/live/status`
 - `WS /api/v1/live/ws`
-- `GET /api/v1/vision/detections/latest`
-- `GET /api/v1/vision/objects/current`
+
+Backend pushes into relay through an internal authenticated ingest endpoint.
+Metadata and annotated screenshots are uploaded separately; relay does not store original frames.
 
 ## Notes
 

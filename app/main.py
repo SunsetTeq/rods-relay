@@ -3,14 +3,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.config import settings
-from app.routes.backend_proxy import router as backend_proxy_router
+from app.routes.events import router as events_router
 from app.routes.health import router as health_router
+from app.routes.internal_events import router as internal_events_router
+from app.routes.live import router as live_router
 from app.routes.relay import router as relay_router
+from app.services.live_event_provider import live_event_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    live_event_service.start()
     yield
+    live_event_service.stop()
 
 
 app = FastAPI(
@@ -21,4 +26,6 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(relay_router)
-app.include_router(backend_proxy_router)
+app.include_router(events_router)
+app.include_router(live_router)
+app.include_router(internal_events_router)
